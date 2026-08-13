@@ -291,15 +291,19 @@ const describePosix = process.platform === 'win32' ? describe.skip : describe
 const hasBash = process.platform !== 'win32' && spawnSync('bash', ['--version']).status === 0
 const itWithBash = hasBash ? it : it.skip
 
-function runInteractiveBashRcfile(rcfileContent: string, tempDir: string): string {
+function runInteractiveBashRcfile(
+  rcfileContent: string,
+  tempDir: string,
+  input = 'true\nfalse\nexit 0\n'
+): string {
   const rcfile = join(tempDir, 'bash-osc133-rcfile')
   writeFileSync(rcfile, rcfileContent)
 
   const result = spawnSync(
     'bash',
-    ['-lc', 'bash --noprofile --rcfile "$1" -i 2>&1', 'bash', rcfile],
+    ['--noprofile', '--norc', '-c', 'bash --noprofile --rcfile "$1" -i 2>&1', 'bash', rcfile],
     {
-      input: 'true\nfalse\nexit 0\n',
+      input,
       encoding: 'utf8',
       env: {
         ...process.env,
@@ -586,6 +590,62 @@ describePosix('local PTY shell-ready launch config', () => {
     expectBashOsc133Lifecycle(output)
   })
 
+  itWithBash('restores bash OSC 133 after a startup file execs a replacement shell', async () => {
+    const { getBashShellReadyRcfileContent } = await importFreshLocalPtyShellReady()
+    writeFileSync(
+      join(userDataPath, '.bash_profile'),
+      [
+        'if [[ -z "${ORCA_EXEC_REPRO_DONE:-}" ]]; then',
+        '  export ORCA_EXEC_REPRO_DONE=1',
+        '  PROMPT_COMMAND=\'printf "USER_EXEC_PROMPT\\n"\'',
+        '  Q_START_TEXT=local-seed exec -a figterm-test bash --noprofile --norc -l -i',
+        'fi',
+        ''
+      ].join('\n')
+    )
+
+    const output = runInteractiveBashRcfile(
+      getBashShellReadyRcfileContent(),
+      userDataPath,
+      'printf \'LOCAL_EXEC_PC=%s:Q_START_TEXT=%s\\n\' "$PROMPT_COMMAND" "$Q_START_TEXT"\nbash --noprofile --norc -c \'printf "REPLACEMENT_CHILD_PC=%s\\n" "${PROMPT_COMMAND-unset}"\'\nexit 0\n'
+    )
+
+    expect(output).toContain('LOCAL_EXEC_PC=__orca_exec_osc133_precmd')
+    expect(output).toContain('Q_START_TEXT=local-seed')
+    expect(output).toContain('USER_EXEC_PROMPT')
+    expect(output).toContain('REPLACEMENT_CHILD_PC=unset')
+    expect(output).toContain('\x1b]777;orca-shell-ready\x07')
+    expect(output).toContain('\x1b]133;C\x07')
+  })
+
+  itWithBash('removes temporary bash exec hooks when startup returns', async () => {
+    const { getBashShellReadyRcfileContent } = await importFreshLocalPtyShellReady()
+    const output = runInteractiveBashRcfile(
+      getBashShellReadyRcfileContent(),
+      userDataPath,
+      'declare -F __orca_exec_osc133_precmd >/dev/null; printf \'TEMP_FUNC=%s:TEMP_PC=%s\\n\' "$?" "${PROMPT_COMMAND//__orca_exec_osc133_/LEAK}"\nif shopt -qo functrace; then printf \'FUNCTRACE_ON\\n\'; else printf \'FUNCTRACE_OFF\\n\'; fi\nbash --noprofile --norc -c \'printf "CHILD_TEMP_PC=%s\\n" "${PROMPT_COMMAND-unset}"\'\nexit 0\n'
+    )
+
+    expect(output).toContain('TEMP_FUNC=1:')
+    expect(output).not.toContain('LEAKprecmd')
+    expect(output).not.toContain('LEAKprompt_done')
+    expect(output).toContain('FUNCTRACE_OFF')
+    expect(output).toContain('CHILD_TEMP_PC=unset')
+  })
+
+  itWithBash('preserves functrace enabled by a user profile', async () => {
+    const { getBashShellReadyRcfileContent } = await importFreshLocalPtyShellReady()
+    writeFileSync(join(userDataPath, '.bash_profile'), 'set -T\n')
+
+    const output = runInteractiveBashRcfile(
+      getBashShellReadyRcfileContent(),
+      userDataPath,
+      "shopt -qo functrace && printf 'USER_FUNCTRACE_ON\\n'\nexit 0\n"
+    )
+
+    expect(output).toContain('USER_FUNCTRACE_ON')
+  })
+
   itWithBash(
     'preserves prompt hooks and existing DEBUG traps without fake command markers',
     async () => {
@@ -750,11 +810,12 @@ describePosix('local PTY shell-ready launch config', () => {
     // Trust the runtime path only when it still holds a wrapper .zshenv; else fall back to the generation-time literal.
     expect(zshenv).toContain(
       'if [[ -n "${_orca_wrapper_zdotdir_self:-}" && -f "${_orca_wrapper_zdotdir_self:-}/.zshenv" ]]; then\n' +
-        '  export ZDOTDIR="${_orca_wrapper_zdotdir_self:-}"\n' +
+        '  _orca_effective_wrapper_zdotdir="${_orca_wrapper_zdotdir_self:-}"\n' +
         'else\n' +
-        `  export ZDOTDIR='${join(userDataPath, 'shell-ready', 'zsh')}'\n` +
+        `  _orca_effective_wrapper_zdotdir='${join(userDataPath, 'shell-ready', 'zsh')}'\n` +
         'fi'
     )
+    expect(zshenv).toContain('export ZDOTDIR="$_orca_effective_wrapper_zdotdir"')
     // Capture must happen before the wrapper unsets ZDOTDIR to source user files.
     expect(zshenv.indexOf('_orca_wrapper_zdotdir_self="${${(%):-%x}:h}"')).toBeLessThan(
       zshenv.indexOf('unset ZDOTDIR')
@@ -784,6 +845,79 @@ describePosix('live zsh subprocess tests', () => {
     afterEach(() => {
       rmSync(testHome, { recursive: true, force: true })
       rmSync(userDataPath, { recursive: true, force: true })
+    })
+
+    it('restores local zsh OSC 133 after a startup file execs a wrapper', async () => {
+      writeFileSync(
+        join(testHome, '.zprofile'),
+        [
+          'if [[ -z "${ORCA_EXEC_REPRO_DONE:-}" ]]; then',
+          '  export ORCA_EXEC_REPRO_DONE=1',
+          '  Q_START_TEXT=local-seed exec -a kiro-cli-term env zsh -o noglobalrcs -l -i',
+          'fi',
+          ''
+        ].join('\n')
+      )
+      const { getShellReadyLaunchConfig } = await importFreshLocalPtyShellReady()
+      const config = getShellReadyLaunchConfig('/bin/zsh')
+      const cleanEnv: Record<string, string | undefined> = {
+        ...process.env,
+        ...config.env,
+        HOME: testHome,
+        PATH: '/usr/bin:/bin',
+        TERM: process.env.TERM || 'xterm'
+      }
+      delete cleanEnv.ORCA_ORIG_ZDOTDIR
+      cleanEnv.ORCA_ZSHENV_SOURCE_DIR = testHome
+
+      const result = spawnSync('zsh', [...(config.args ?? []), '-i'], {
+        input:
+          `printf 'LOCAL_EXEC_PF=%s:Q_START_TEXT=%s\\n' "\${(j:,:)precmd_functions}" "$Q_START_TEXT"\n` +
+          'exit 0\n',
+        encoding: 'utf8',
+        env: cleanEnv as NodeJS.ProcessEnv,
+        timeout: 5_000
+      })
+
+      expect(result.error).toBeUndefined()
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stdout).toContain('LOCAL_EXEC_PF=__orca_osc133_precmd')
+      expect(result.stdout).toContain('Q_START_TEXT=local-seed')
+    })
+
+    it('preserves non-replacing exec redirections and user exec functions', async () => {
+      const execLog = join(testHome, 'exec-startup.log')
+      writeFileSync(
+        join(testHome, '.zprofile'),
+        [
+          'exec > "$HOME/exec-startup.log"',
+          'printf "REDIRECT_ZDOTDIR=%s\\n" "$ZDOTDIR"',
+          'exec() { printf "USER_EXEC_FUNCTION\\n"; }',
+          'exec',
+          ''
+        ].join('\n')
+      )
+      const { getShellReadyLaunchConfig } = await importFreshLocalPtyShellReady()
+      const config = getShellReadyLaunchConfig('/bin/zsh')
+      const cleanEnv: Record<string, string | undefined> = {
+        ...process.env,
+        ...config.env,
+        HOME: testHome,
+        PATH: '/usr/bin:/bin'
+      }
+      delete cleanEnv.ORCA_ORIG_ZDOTDIR
+      cleanEnv.ORCA_ZSHENV_SOURCE_DIR = testHome
+
+      const result = spawnSync('zsh', ['-l', '-c', 'exit 0'], {
+        encoding: 'utf8',
+        env: cleanEnv as NodeJS.ProcessEnv,
+        timeout: 5_000
+      })
+
+      expect(result.error).toBeUndefined()
+      expect(result.status, result.stderr).toBe(0)
+      expect(readFileSync(execLog, 'utf8')).toContain(`REDIRECT_ZDOTDIR=${testHome}`)
+      expect(readFileSync(execLog, 'utf8')).toContain('USER_EXEC_FUNCTION')
     })
 
     it('preserves typeset -U path scoping when user .zshrc uses it', async () => {

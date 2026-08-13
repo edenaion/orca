@@ -108,6 +108,95 @@
       "demotionRule": "Keep experimental or demote if prompt fallback enters a normal, child, or line-init read; a non-shell executable triggers prompt fallback; the identified shell PID is not foreground; delivery duplicates; ordinary startup output spawns probes; probe attempts exceed four; or the focused gate flakes without an identified harness defect."
     },
     {
+      "id": "terminal-session.shell-ready-exec-integration-restoration",
+      "title": "Exec-replaced shells retain Orca prompt instrumentation",
+      "maturity": "experimental",
+      "protection": "partial",
+      "owner": "terminal-session-readiness",
+      "layer": "posix-shell-startup",
+      "surfaces": ["OSC 133 command lifecycle", "queued terminal startup commands"],
+      "platforms": ["macos", "linux"],
+      "providers": ["local", "local-daemon", "ssh-daemon", "ssh-relay", "paired-runtime"],
+      "coveredPlatforms": ["macos"],
+      "coveredProviders": ["local", "local-daemon", "ssh-relay"],
+      "coverageNotes": "Real macOS zsh and bash subprocesses execute Fig/Kiro-shaped replacements from .zshenv, .zprofile, and .bash_profile. Local, daemon, and relay wrappers prove re-entry, readiness, OSC 133 where that wrapper already provides it, leading environment assignments, exec -a, prompt rewrites, bare exec redirections, user exec functions, and temporary-hook cleanup. Existing WSL and non-ASCII ZDOTDIR contracts exercise the shared zsh templates; live Linux, WSL, SSH-daemon, and paired-runtime evidence remains uncollected.",
+      "motivatingLinks": [
+        "https://linear.app/stably/issue/STA-4084/restore-osc-133-shell-integration-when-an-exec-in-user-rc-files-strips",
+        "https://github.com/stablyai/orca/issues/13767"
+      ],
+      "invariant": "When a supported startup file replaces zsh or bash with exec, the replacement shell re-enters Orca's established prompt instrumentation before its first usable prompt, preserving shell readiness, exactly-once startup-command delivery, and the wrapper's OSC 133 lifecycle contract.",
+      "oracle": "Launch real generated wrappers with disposable HOME directories whose startup files execute Fig/Kiro-shaped replacement shells. Require the queued command exactly once, an authoritative ready state, restored zsh precmd or bash PROMPT_COMMAND hooks, OSC 133 C output where supported, preserved leading environment assignments, and no leaked temporary startup trap after non-replacing startup.",
+      "commands": [
+        "pnpm exec vitest run --config config/vitest.config.ts src/main/daemon/repro-13767-shell-ready-marker-lost-to-exec.test.ts src/main/providers/local-pty-shell-ready.test.ts src/relay/pty-shell-launch.test.ts"
+      ],
+      "testFiles": [
+        "src/main/daemon/repro-13767-shell-ready-marker-lost-to-exec.test.ts",
+        "src/main/providers/local-pty-shell-ready.test.ts",
+        "src/relay/pty-shell-launch.test.ts"
+      ],
+      "assertionRefs": [
+        {
+          "file": "src/main/daemon/repro-13767-shell-ready-marker-lost-to-exec.test.ts",
+          "assertions": [
+            "real zsh and bash replacement shells restore instrumentation and receive the queued command exactly once",
+            "same-shell and child-process silent reads still retain queued input"
+          ]
+        },
+        {
+          "file": "src/main/providers/local-pty-shell-ready.test.ts",
+          "assertions": [
+            "local zsh and bash wrappers survive Fig-shaped exec replacements",
+            "bash prompt rewrites are re-pinned before exec and temporary hooks are removed after normal startup",
+            "zsh bare exec redirections and user exec functions retain native behavior"
+          ]
+        },
+        {
+          "file": "src/relay/pty-shell-launch.test.ts",
+          "assertions": [
+            "persistent relay zsh and bash wrappers restore their established readiness and prompt hooks after exec"
+          ]
+        }
+      ],
+      "evidenceRuns": [
+        {
+          "date": "2026-08-12",
+          "runner": "local",
+          "platform": "macos",
+          "command": "pnpm exec vitest run --config config/vitest.config.ts src/main/daemon/repro-13767-shell-ready-marker-lost-to-exec.test.ts src/main/providers/local-pty-shell-ready.test.ts src/relay/pty-shell-launch.test.ts",
+          "result": "passed",
+          "durationSeconds": 7.51,
+          "summary": "All 103 focused local, daemon, and relay assertions passed, including real zsh/bash exec restoration."
+        }
+      ],
+      "runtimeBudget": {
+        "p95Seconds": 10,
+        "scope": "focused real zsh/bash local, daemon, and relay wrapper contracts"
+      },
+      "flakeHistory": {
+        "status": "unknown",
+        "evidence": "Deterministic local macOS runs pass; CI and soak history are not yet available."
+      },
+      "redGreenEvidence": {
+        "status": "partial",
+        "evidence": "The prior #13767 production path and its prompt-fallback gate prove the replacement-shell failure. The strengthened oracles require restored OSC 133 hooks and now pass, but a saved intentional-revert artifact for this restoration implementation has not been collected."
+      },
+      "performanceBudget": {
+        "required": true,
+        "evidence": "The zsh DEBUG trap and bash exported prompt bridge exist only while startup files are sourced or until the replacement shell's prompt lifecycle takes ownership. The change adds no polling, timers, subprocesses, listeners, network work, or unbounded state."
+      },
+      "promotionCriteria": [
+        "Collect live Linux, WSL, SSH-daemon, and paired-runtime evidence.",
+        "Collect 100 consecutive CI passes or 14 days of soak history without unexplained flakes.",
+        "Retain native exec redirection, user function authority, prompt-hook cleanup, and exactly-once delivery assertions."
+      ],
+      "knownGaps": [
+        "A third-party launcher that sanitizes exported shell state or bypasses supported shell startup and prompt hooks cannot inherit the restoration bridge.",
+        "A bash profile that replaces Orca's temporary DEBUG trap and later overwrites PROMPT_COMMAND before exec can still fall through to the existing safe prompt-readiness fallback.",
+        "Native Windows PowerShell and cmd do not use these POSIX wrapper paths."
+      ],
+      "demotionRule": "Keep experimental or demote if an exec-replaced supported shell reaches its first usable prompt without the established Orca lifecycle, startup delivery duplicates, native exec behavior changes, temporary startup hooks leak after normal startup, or the focused oracle flakes without an identified harness defect."
+    },
+    {
       "id": "editor.restored-sibling-owner-reparent",
       "title": "Restored sibling tabs migrate filesystem authority before becoming editable",
       "maturity": "experimental",

@@ -10,6 +10,50 @@ export const SHELL_STARTUP_IDENTITY_MARKER_BLOCK = `if [[ "\${ORCA_SHELL_STARTUP
   printf "\\033]777;orca-shell-start:%s\\007" "$$"
 fi`
 
+export function getZshStartupExecPreservationStart(wrapperZdotdirExpression: string): string {
+  return `_orca_exec_wrapper_zdotdir=${wrapperZdotdirExpression}
+_orca_exec_debug_installed=0
+# Why: startup integrations such as Kiro/Fig replace zsh with exec; repin the
+# child so the replacement shell loads Orca's wrapper and OSC 133 hooks.
+if (( ! \${+functions[TRAPDEBUG]} && ! \${+aliases[exec]} && ! \${+functions[exec]} )); then
+  TRAPDEBUG() {
+    local -a _orca_exec_words
+    _orca_exec_words=("\${(z)ZSH_DEBUG_CMD}")
+    local _orca_exec_index=1
+    while (( _orca_exec_index <= \${#_orca_exec_words} )) && [[ "\${(Q)_orca_exec_words[_orca_exec_index]}" == *=* ]]; do
+      (( _orca_exec_index++ ))
+    done
+    while (( _orca_exec_index <= \${#_orca_exec_words} )) && [[ "\${(Q)_orca_exec_words[_orca_exec_index]}" == command || "\${(Q)_orca_exec_words[_orca_exec_index]}" == builtin || "\${(Q)_orca_exec_words[_orca_exec_index]}" == noglob ]]; do
+      (( _orca_exec_index++ ))
+    done
+    if [[ "\${(Q)_orca_exec_words[_orca_exec_index]-}" == exec && \${+functions[exec]} -eq 0 ]]; then
+      (( _orca_exec_index++ ))
+      while (( _orca_exec_index <= \${#_orca_exec_words} )); do
+        case "\${(Q)_orca_exec_words[_orca_exec_index]}" in
+          -a) (( _orca_exec_index += 2 )) ;;
+          -c|-l|-cl|-lc) (( _orca_exec_index++ )) ;;
+          --) (( _orca_exec_index++ )); break ;;
+          *) break ;;
+        esac
+      done
+      case "\${(Q)_orca_exec_words[_orca_exec_index]-}" in
+        ""|"("|*"<"*|*">"*) ;;
+        *) export ZDOTDIR="$_orca_exec_wrapper_zdotdir" ;;
+      esac
+    fi
+  }
+  _orca_exec_debug_body="\${functions[TRAPDEBUG]}"
+  _orca_exec_debug_installed=1
+fi`
+}
+
+export const ZSH_STARTUP_EXEC_PRESERVATION_END = `if (( \${_orca_exec_debug_installed:-0} )); then
+  if [[ "\${functions[TRAPDEBUG]-}" == "\${_orca_exec_debug_body-}" ]]; then
+    unfunction TRAPDEBUG
+  fi
+fi
+unset _orca_exec_wrapper_zdotdir _orca_exec_debug_installed _orca_exec_debug_body`
+
 export function getZshEnvTemplate(zshDir: string, headerPrefix = ''): string {
   const header = headerPrefix
     ? `Orca ${headerPrefix} zsh shell-ready wrapper`
@@ -54,6 +98,12 @@ case "\${_orca_zshenv_source_dir}" in
   ""|*/shell-ready/zsh) _orca_zshenv_source_dir="$HOME" ;;
 esac
 
+if [[ -n "\${_orca_wrapper_zdotdir_self:-}" && -f "\${_orca_wrapper_zdotdir_self:-}/.zshenv" ]]; then
+  _orca_effective_wrapper_zdotdir="\${_orca_wrapper_zdotdir_self:-}"
+else
+  _orca_effective_wrapper_zdotdir=${quotePosixSingle(zshDir)}
+fi
+
 # Why: source at wrapper top level, not in a function/subshell, so .zshenv
 # exports, functions, path/fpath typesets, and zsh options keep normal scope.
 unset ZDOTDIR
@@ -61,7 +111,9 @@ if [[ -n "\${_orca_zshenv_source_dir:-}" && -f "\${_orca_zshenv_source_dir}/.zsh
   _orca_zshenv_path="\${_orca_zshenv_source_dir}/.zshenv"
 fi
 if [[ -n "\${_orca_zshenv_path:-}" ]]; then
+${getZshStartupExecPreservationStart('"$_orca_effective_wrapper_zdotdir"')}
   source "\${_orca_zshenv_path}"
+${ZSH_STARTUP_EXEC_PRESERVATION_END}
 fi
 
 _orca_discovered_zdotdir="\${ZDOTDIR:-}"
@@ -90,14 +142,8 @@ case "\${ORCA_ORIG_ZDOTDIR}" in
   ""|*/shell-ready/zsh) export ORCA_ORIG_ZDOTDIR="$HOME" ;;
 esac
 
-# Why: use :- after user .zshenv — a pathological unset under set -u must not
-# abort the wrapper; empty falls through to the baked-literal branch.
-if [[ -n "\${_orca_wrapper_zdotdir_self:-}" && -f "\${_orca_wrapper_zdotdir_self:-}/.zshenv" ]]; then
-  export ZDOTDIR="\${_orca_wrapper_zdotdir_self:-}"
-else
-  export ZDOTDIR=${quotePosixSingle(zshDir)}
-fi
-unset _orca_spawn_orig_zdotdir _orca_user_zdotdir _orca_zshenv_source_dir _orca_zshenv_path _orca_discovered_zdotdir _orca_wrapper_zdotdir_self
+export ZDOTDIR="$_orca_effective_wrapper_zdotdir"
+unset _orca_spawn_orig_zdotdir _orca_user_zdotdir _orca_zshenv_source_dir _orca_zshenv_path _orca_discovered_zdotdir _orca_wrapper_zdotdir_self _orca_effective_wrapper_zdotdir
 `
 }
 
@@ -123,7 +169,9 @@ if [[ ${checks.join(' && ')} ]]; then
   # Why: user startup files resolve plugin/config paths from their own ZDOTDIR;
   # Orca restores its wrapper dir afterward so zsh still loads wrapper files.
   export ZDOTDIR="$_orca_home"
+${getZshStartupExecPreservationStart('"$_orca_wrapper_zdotdir"')}
   source "$_orca_home/${options.fileName}"
+${ZSH_STARTUP_EXEC_PRESERVATION_END}
   export ZDOTDIR="$_orca_wrapper_zdotdir"
   unset _orca_wrapper_zdotdir
 fi
