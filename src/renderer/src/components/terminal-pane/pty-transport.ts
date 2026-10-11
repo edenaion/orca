@@ -5,6 +5,7 @@ import { createIpcPtySessionHandlers } from './ipc-pty-session-handlers'
 import { createPtyInputWriteQueue } from './pty-input-write-queue'
 import { createPtyOutputProcessor } from './pty-output-processor'
 import { createPtyPreconnectInputBuffer } from './pty-preconnect-input-buffer'
+import { createPtyPreconnectInputFlusher } from './pty-preconnect-input-flusher'
 import type { IpcPtyTransportOptions, PtyTransport } from './pty-transport-types'
 import type { TerminalInputKind } from '../../../../shared/terminal-input-kind'
 
@@ -107,40 +108,16 @@ export function createIpcPtyTransport(opts: IpcPtyTransportOptions = {}): PtyTra
   const setCallbacks = (callbacks: typeof storedCallbacks): void => {
     storedCallbacks = callbacks
   }
-  const dropPreconnectInput = (reason: string): void => {
-    if (preconnectInputBuffer?.hasPendingInput()) {
-      console.warn(
-        `[pty-transport] dropped keys typed while the terminal was connecting: ${reason}`
-      )
-    }
-    preconnectInputBuffer?.clear()
-  }
-  const flushPreconnectInput = async (): Promise<void> => {
-    if (!preconnectInputBuffer?.isBuffering()) {
-      return
-    }
-    const id = ptyId
-    if (destroyed || !connected || !id) {
-      // Why: a closed pane's keys have no owner; only a failed attach is worth reporting.
-      if (destroyed) {
-        preconnectInputBuffer.clear()
-      } else {
-        dropPreconnectInput('the terminal did not attach')
-      }
-      return
-    }
-    await preconnectInputBuffer.flush({
-      isCurrent: () => !destroyed && connected && ptyId === id,
-      sendInput: (data, inputKind) => inputWriteQueue.enqueue(id, data, inputKind),
-      sendInputImmediate: (data) => inputWriteQueue.enqueueQueryReply(id, data),
-      ...(connectionId
-        ? {}
-        : {
-            sendInputAccepted: (data: string, inputKind: TerminalInputKind) =>
-              inputWriteQueue.enqueueAccepted(id, data, inputKind)
-          })
-    })
-  }
+  const preconnectFlusher = createPtyPreconnectInputFlusher({
+    buffer: preconnectInputBuffer,
+    inputWriteQueue,
+    isDestroyed: () => destroyed,
+    isConnected: () => connected,
+    getPtyId: () => ptyId,
+    hasConnectionId: Boolean(connectionId)
+  })
+  const dropPreconnectInput = preconnectFlusher.drop
+  const flushPreconnectInput = preconnectFlusher.flush
 
   return {
     getPendingEscapeTailAnsi: outputProcessor.getPendingEscapeTailAnsi,
@@ -286,7 +263,11 @@ export function createIpcPtyTransport(opts: IpcPtyTransportOptions = {}): PtyTra
       if (!connected || !ptyId) {
         return false
       }
-      window.api.pty.resize(ptyId, cols, rows)
+      if (!connectionId && meta?.cellW !== undefined && meta.cellH !== undefined) {
+        window.api.pty.resize(ptyId, cols, rows, { width: meta.cellW, height: meta.cellH })
+      } else {
+        window.api.pty.resize(ptyId, cols, rows)
+      }
       if (meta?.claim) {
         window.api.pty.claimViewport(ptyId, cols, rows)
       }

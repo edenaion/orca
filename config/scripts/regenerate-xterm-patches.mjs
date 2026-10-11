@@ -19,11 +19,11 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   CHECKOUT_DIFF_FLAGS,
-  PNPM_DIFF_FLAGS,
   assertSourceDerivationsAgree,
   escapeRegExp,
   formatCheckFailure,
   normalizePnpmDiff,
+  pnpmDiffArguments,
   pnpmDiffEnvironment
 } from './xterm-patch-text.mjs'
 
@@ -166,7 +166,10 @@ const WINDOWS_SHIM_COMMANDS = new Set(['npm', 'npx', 'pnpm', 'yarn'])
 
 function run(command, args, options = {}) {
   const shim = process.platform === 'win32' && WINDOWS_SHIM_COMMANDS.has(command)
-  return execFileSync(shim ? `${command}.cmd` : command, args, {
+  // Patched source and sourcemap bytes must not inherit host Git line endings.
+  const argv =
+    command === 'git' ? ['-c', 'core.autocrlf=false', '-c', 'core.eol=lf', ...args] : args
+  return execFileSync(shim ? `${command}.cmd` : command, argv, {
     encoding: 'utf8',
     maxBuffer: 256 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'inherit'],
@@ -203,7 +206,7 @@ function fetchPristinePackage(packageEntry, workDir) {
     cwd: workDir
   })
   const tarball = path.join(target, output.trim().split('\n').at(-1).trim())
-  run('tar', ['xzf', tarball, '-C', target])
+  run('tar', ['xzf', path.basename(tarball)], { cwd: target })
   return path.join(target, 'package')
 }
 
@@ -227,8 +230,17 @@ function ensureUpstreamCheckout(manifest, workDir) {
     run('git', ['fetch', '--depth=1', 'origin', commit], { cwd: root, stdio: 'inherit' })
   }
   run('git', ['checkout', '--quiet', '--detach', commit], { cwd: root })
-  run('git', ['reset', '--quiet', '--hard', commit], { cwd: root })
+  resetCheckoutSource(root, commit)
   return root
+}
+
+export function resetCheckoutSource(root, commit) {
+  run('git', ['reset', '--quiet', '--hard', commit], { cwd: root })
+  // Clear cached checkout stats so every registry source is written with LF.
+  run('git', ['read-tree', '--empty'], { cwd: root })
+  run('git', ['reset', '--quiet', '--hard', commit], { cwd: root })
+  // New source files from a previous package must not enter the pristine build.
+  run('git', ['clean', '-fd', '--', 'src/', ':(glob)addons/*/src/**'], { cwd: root })
 }
 
 function ensureDependencies(upstreamRoot, manifest) {
@@ -273,12 +285,21 @@ function assertToolchain(upstreamRoot, manifest) {
  * stamp publish.js rewrites. If it does not, the manifest points at the wrong
  * commit and every hunk below would be nonsense.
  */
-function assertPristineSourceMatches(pristineDir, upstreamRoot, packageEntry) {
+export function assertPristineSourceMatches(pristineDir, upstreamRoot, packageEntry) {
+  if (packageEntry.sourceDistribution === 'omitted') {
+    if (existsSync(path.join(pristineDir, 'src'))) {
+      throw new Error(`${packageEntry.name}: sourceDistribution omits published source files`)
+    }
+    return
+  }
+  if (packageEntry.sourceDistribution && packageEntry.sourceDistribution !== 'included') {
+    throw new Error(`${packageEntry.name}: unknown sourceDistribution`)
+  }
   const stampFile = packageEntry.versionStampFile
   const sourceRoot = path.join(pristineDir, 'src')
   const drifted = listFilesRelative(sourceRoot)
     .map((relative) => path.join('src', relative))
-    .filter((relative) => relative !== stampFile)
+    .filter((relative) => toPosix(relative) !== stampFile)
     .filter(
       (relative) =>
         !sameBytes(
@@ -293,10 +314,40 @@ function assertPristineSourceMatches(pristineDir, upstreamRoot, packageEntry) {
   }
 }
 
+export function adaptAddonBuildCommandsForWindows(packageRoot, platform = process.platform) {
+  if (platform !== 'win32') {
+    return
+  }
+  const file = path.join(packageRoot, 'package.json')
+  const metadata = JSON.parse(readFileSync(file, 'utf8'))
+  let changed = false
+  for (const name of ['build', 'prepackage', 'package']) {
+    const command = metadata.scripts?.[name]
+    if (typeof command !== 'string') {
+      continue
+    }
+    const portable = command.replace(
+      /^\.\.\/\.\.\/node_modules\/\.bin\/(tsgo|webpack)(?=\s|$)/,
+      '$1'
+    )
+    if (portable !== command) {
+      metadata.scripts[name] = portable
+      changed = true
+    }
+  }
+  if (changed) {
+    writeFileSync(file, `${JSON.stringify(metadata, null, 2)}\n`)
+  }
+}
+
 function buildPackage(upstreamRoot, packageEntry, manifest) {
   const packageRoot = path.join(upstreamRoot, packageEntry.packageDir)
   for (const directory of ['lib', 'out', 'out-esbuild']) {
     rmSync(path.join(packageRoot, directory), { recursive: true, force: true })
+  }
+  const outputRoot = path.join(packageRoot, packageEntry.buildOutputDir ?? '.')
+  for (const directory of packageEntry.generatedPaths) {
+    rmSync(path.join(outputRoot, directory), { recursive: true, force: true })
   }
   if (packageEntry.versionStampFile) {
     const stampPath = path.join(packageRoot, packageEntry.versionStampFile)
@@ -306,6 +357,7 @@ function buildPackage(upstreamRoot, packageEntry, manifest) {
     )
   }
   assertBuildStepsAllowed(manifest)
+  adaptAddonBuildCommandsForWindows(packageRoot)
   for (const step of packageEntry.build) {
     run(step.command, step.args, { cwd: path.join(packageRoot, step.cwd), stdio: 'inherit' })
   }
@@ -313,7 +365,11 @@ function buildPackage(upstreamRoot, packageEntry, manifest) {
 
 /** Proves the pinned toolchain still reproduces the untouched published bundles. */
 function assertReproducesPristineBundles(pristineDir, upstreamRoot, packageEntry) {
-  const packageRoot = path.join(upstreamRoot, packageEntry.packageDir)
+  const packageRoot = path.join(
+    upstreamRoot,
+    packageEntry.packageDir,
+    packageEntry.buildOutputDir ?? '.'
+  )
   const drifted = listFilesRelative(pristineDir)
     .filter((relative) =>
       packageEntry.generatedPaths.some((prefix) => toPosix(relative).startsWith(prefix))
@@ -338,28 +394,55 @@ function toPosix(value) {
   return value.split(path.sep).join('/')
 }
 
-function overlayBuildOutput(pristineDir, upstreamRoot, packageEntry, destination) {
+export function overlayBuildOutput(pristineDir, upstreamRoot, packageEntry, destination) {
   rmSync(destination, { recursive: true, force: true })
   cpSync(pristineDir, destination, { recursive: true })
   const packageRoot = path.join(upstreamRoot, packageEntry.packageDir)
+  const outputRoot = path.join(packageRoot, packageEntry.buildOutputDir ?? '.')
   for (const relative of listFilesRelative(pristineDir)) {
     // package.json carries the registry's version/commit stamp, which the build
     // tree has no way to reproduce and which we never want to patch.
     if (relative === 'package.json') {
       continue
     }
-    const built = path.join(packageRoot, relative)
+    // Headless bundles live in headless/ while its published typings live at the root.
+    const built = path.join(
+      toPosix(relative).startsWith('typings/') ? packageRoot : outputRoot,
+      relative
+    )
     if (!existsSync(built)) {
       throw new Error(`Published file has no build-tree counterpart: ${relative}`)
     }
     copyFileSync(built, path.join(destination, relative))
+  }
+  if (packageEntry.sourceDistribution === 'omitted') {
+    return
+  }
+  // New production modules belong in the patch too; upstream excludes test sources.
+  const newSources = run(
+    'git',
+    ['ls-files', '-z', '--others', '--exclude-standard', '--', 'src/'],
+    {
+      cwd: packageRoot
+    }
+  )
+  for (const relative of newSources.split('\0').filter(Boolean)) {
+    if (
+      !/\.(ts|js|css|js\.map)$/.test(relative) ||
+      /\.test\.(ts|d\.ts|js|js\.map)$/.test(relative)
+    ) {
+      continue
+    }
+    const target = path.join(destination, relative)
+    mkdirSync(path.dirname(target), { recursive: true })
+    copyFileSync(path.join(packageRoot, relative), target)
   }
 }
 
 function diffFolders(folderA, folderB) {
   let stdout
   try {
-    stdout = execFileSync('git', [...PNPM_DIFF_FLAGS, folderA, folderB], {
+    stdout = execFileSync('git', pnpmDiffArguments(folderA, folderB), {
       encoding: 'utf8',
       maxBuffer: 512 * 1024 * 1024,
       env: pnpmDiffEnvironment(),
@@ -397,7 +480,7 @@ function regeneratePackage(packageEntry, manifest, context) {
   buildPackage(upstreamRoot, packageEntry, manifest)
   assertReproducesPristineBundles(pristineDir, upstreamRoot, packageEntry)
 
-  run('git', ['reset', '--quiet', '--hard', manifest.upstream.commit], { cwd: upstreamRoot })
+  resetCheckoutSource(upstreamRoot, manifest.upstream.commit)
   const packageDir = toPosix(packageEntry.packageDir)
   run(
     'git',
@@ -423,6 +506,9 @@ function regeneratePackage(packageEntry, manifest, context) {
     })
   }
 
+  run('git', ['add', '--intent-to-add', '--', 'src/'], {
+    cwd: path.join(upstreamRoot, packageEntry.packageDir)
+  })
   const source = diffCheckoutSource(path.join(upstreamRoot, packageEntry.packageDir))
   if (source.trim().length === 0) {
     throw new Error(
@@ -432,7 +518,10 @@ function regeneratePackage(packageEntry, manifest, context) {
     )
   }
   const patch = diffFolders(pristineDir, patchedDir)
-  assertSourceDerivationsAgree(source, patch)
+  assertSourceDerivationsAgree(source, patch, {
+    sourceDistribution: packageEntry.sourceDistribution,
+    generatedPaths: packageEntry.generatedPaths
+  })
   return { patch, source }
 }
 

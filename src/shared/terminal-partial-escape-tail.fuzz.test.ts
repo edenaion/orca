@@ -49,7 +49,7 @@ const ALPHABET = [
   '\udc00'
 ]
 
-// One representative of every state the scanner can be left in.
+// Raw prefixes exercising every state the scanner can be left in.
 const PENDINGS = [
   '',
   '\x1b',
@@ -61,11 +61,21 @@ const PENDINGS = [
   '\x1bPx\x1b',
   '\x1b(',
   '\x1b ',
-  '\x1b[1;2;3'
+  '\x1b[1;2;3',
+  '\u009b31;',
+  '\u009d0;title',
+  '\u0090q',
+  '\u009fG'
 ]
 
 const SEQUENCES = [
   '\x1b[1;31m',
+  '\u009b31m',
+  '\u009d1337;File=inline=1:payload\u009c',
+  '\u009fGa=T,f=32;payload\u009c',
+  '\u0090q#1~\u009c',
+  '\u009d2;title\x1b\\',
+  '\x1b[31;\u009b32m',
   '\x1b]0;my title\x07',
   '\x1b]8;;https://example.com\x1b\\',
   '\x1bPq#0;2;0;0;0#0!6~\x1b\\',
@@ -109,10 +119,7 @@ function* stringsUpTo(maxDepth: number): Generator<{ depth: number; text: string
 describe('advancePartialEscapeTail differential fuzz', () => {
   let checked = 0
   let foldSplits = 0
-  // Why the sweep and not just `advance(extract(pending), chunk)`: every PENDINGS entry is
-  // already a tail, so `extract(pending) === pending` makes that form a tautology. Only
-  // re-splitting the combined stream lands a boundary inside oscEsc/stringEsc, where the
-  // CAN/SUB abort and the second-ESC restart live.
+  // Split raw streams too: normalized tails alone miss string-terminator boundaries.
   const checkFolds = (text: string): void => {
     if (text.length > 32) {
       return // keeps the cap corpus (5000-char chunks) out of an O(n^2) sweep
@@ -187,8 +194,7 @@ describe('advancePartialEscapeTail differential fuzz', () => {
   })
 
   it('ran the whole corpus', () => {
-    expect(checked).toBe(963_819)
-    // Completed strings retain only ESC, so the same corpus has fewer tail splits.
-    expect(foldSplits).toBe(6_234_666)
+    expect(checked).toBe(1_030_623)
+    expect(foldSplits).toBe(6_790_381)
   })
 })

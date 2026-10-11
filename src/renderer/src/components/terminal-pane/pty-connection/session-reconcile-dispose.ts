@@ -102,6 +102,7 @@ export function installSessionReconcileDispose(session: ConnectPanePtySession): 
     noteVisibilityResume() {
       session.armVisibleRemoteViewportClaim()
       session.claimPendingVisibleRemoteViewport()
+      session.imageCellMeasurementsDisposable?.reassert()
       session.ptySizeReassertion.request({ fit: false })
       session.consumeHibernatedAgentWake()
       session.resumeDeferredSpawnOnReveal()
@@ -111,6 +112,7 @@ export function installSessionReconcileDispose(session: ConnectPanePtySession): 
     reassertPtySizeAfterWindowWake() {
       session.armVisibleRemoteViewportClaim()
       session.claimPendingVisibleRemoteViewport()
+      session.imageCellMeasurementsDisposable?.reassert()
       session.ptySizeReassertion.request({ fit: false })
     },
     // Why: mobile wake reaches this pane while it's hidden on the desktop, so consume only the armed hibernation wake — no size/foreground reads.
@@ -297,6 +299,7 @@ export function installSessionReconcileDispose(session: ConnectPanePtySession): 
       session.userInputActivityDisposable?.dispose()
       session.terminalCapabilityRepliesDisposable.dispose()
       session.onResizeDisposable.dispose()
+      session.imageCellMeasurementsDisposable?.dispose()
       session.pane.container.removeEventListener(
         PANE_PTY_RESIZE_HOLD_FLUSH_EVENT,
         session.onHeldPtyResizeFlush

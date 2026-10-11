@@ -41,6 +41,11 @@ export const CHECKOUT_DIFF_FLAGS = PNPM_DIFF_FLAGS.filter((flag) => flag !== '--
   (flag) => (flag === '--' ? ['--relative', '--'] : [flag])
 )
 
+export function pnpmDiffArguments(folderA, folderB) {
+  // Git quotes native Windows backslashes; pnpm normalizes paths before diffing.
+  return [...PNPM_DIFF_FLAGS, folderA.replace(/\\/g, '/'), folderB.replace(/\\/g, '/')]
+}
+
 /** Applies pnpm's git config isolation so local machine settings cannot change the patch. */
 export function pnpmDiffEnvironment(baseEnvironment = process.env) {
   return {
@@ -108,9 +113,28 @@ export function sourceHunks(patchText) {
  * they must produce the same bytes. A source hunk the emitted patch cannot carry
  * would be deleted by the next `--write`, so this fails instead of shipping one.
  */
-export function assertSourceDerivationsAgree(checkoutSource, patchText) {
+export function assertSourceDerivationsAgree(
+  checkoutSource,
+  patchText,
+  { sourceDistribution = 'included', generatedPaths = [] } = {}
+) {
   const checkout = sourceHunks(checkoutSource)
   const emitted = sourceHunks(patchText)
+  // Headless publishes bundles/maps only; its separately pinned source patch remains authoritative.
+  if (sourceDistribution === 'omitted') {
+    const bundles = selectPatchEntries(patchText, (file) =>
+      generatedPaths.some((prefix) => file.startsWith(prefix))
+    )
+    if (!checkout || emitted || !bundles) {
+      throw new Error(
+        'An omitted-source package must have source edits, bundle changes, and no emitted source files'
+      )
+    }
+    return
+  }
+  if (sourceDistribution !== 'included') {
+    throw new Error('Unknown sourceDistribution')
+  }
   if (checkout === emitted) {
     return
   }

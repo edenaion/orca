@@ -1,4 +1,5 @@
 import type { SpawnIntent } from '../../shared/host-spawn-admission'
+import type { TerminalImageCellSize } from '../../shared/terminal-image-cell-size'
 import type { ParsedAgentStatusPayload } from '../../shared/agent-status-types'
 import type {
   AgentLaunchPreferences,
@@ -66,6 +67,7 @@ export type TerminalCreateOptions = {
   agentArgs?: string | null
   launchPreferences?: AgentLaunchPreferences
   terminalKittyKeyboardProtocol?: boolean
+  terminalImageCellSize?: TerminalImageCellSize
   terminalColorQueryReplies?: TerminalOscColorQueryReplyColors
   viewMode?: 'terminal' | 'chat'
   /** The tab group a background create joins; defaults to the first group. */

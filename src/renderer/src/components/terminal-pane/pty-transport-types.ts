@@ -2,6 +2,7 @@ import type {
   RestoreSpawnIntent,
   SpawnDeferralReason
 } from '../../../../shared/host-spawn-admission'
+import type { TerminalImageCellSize } from '../../../../shared/terminal-image-cell-size'
 import type { ParsedAgentStatusPayload } from '../../../../shared/agent-status-types'
 import type {
   AgentProviderSessionMetadata,
@@ -165,6 +166,7 @@ export type PtyTransport = {
   connect: (options: {
     url: string
     cols?: number
+    terminalImageCellSize?: TerminalImageCellSize
     rows?: number
     sessionId?: string
     /** Hidden-at-spawn declaration (terminal-query-authority.md): no visible

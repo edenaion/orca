@@ -54,6 +54,7 @@ overrides:
   monaco-editor>dompurify: 3.4.16
 
 patchedDependencies:
+  '@xterm/headless@6.1.0-beta.302': config/patches/@xterm__headless@6.1.0-beta.302.patch
   '@xterm/addon-image@0.10.0-beta.300': config/patches/@xterm__addon-image@0.10.0-beta.300.patch
   node-pty@1.1.0: config/patches/node-pty@1.1.0.patch
   '@xterm/addon-ligatures@0.11.0-beta.300': config/patches/@xterm__addon-ligatures@0.11.0-beta.300.patch
@@ -66,3 +67,8 @@ patchedDependencies:
   i18next-cli@1.74.2: config/patches/i18next-cli@1.74.2.patch
   ws@8.22.0: config/patches/ws@8.22.0.patch
   oxlint-plugin-anti-slop@0.1.2: config/patches/oxlint-plugin-anti-slop@0.1.2.patch
+  '@jsquash/png@3.1.1': config/patches/@jsquash__png@3.1.1.patch
+  '@jsquash/jpeg@1.6.0': config/patches/@jsquash__jpeg@1.6.0.patch
+  '@jsquash/webp@1.5.0': config/patches/@jsquash__webp@1.5.0.patch
+  '@jsquash/avif@2.1.1': config/patches/@jsquash__avif@2.1.1.patch
+  omggif@1.0.10: config/patches/omggif@1.0.10.patch

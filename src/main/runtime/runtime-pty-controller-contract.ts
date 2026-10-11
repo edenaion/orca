@@ -1,4 +1,5 @@
 import type { SpawnIntent } from '../../shared/host-spawn-admission'
+import type { TerminalImageCellSize } from '../../shared/terminal-image-cell-size'
 import type {
   AgentSessionClaimedSpawnResult,
   AgentSessionExecutionClaim,
@@ -75,6 +76,7 @@ export type RuntimePtyController = {
     expectedSourceBinding?: PtyBindingSourceExpectation
     placement?: TerminalPanePlacement
     terminalKittyKeyboardProtocol?: boolean
+    terminalImageCellSize?: TerminalImageCellSize
     terminalColorQueryReplies?: { foreground?: string; background?: string }
     agentSessionEnsure?: {
       claim: AgentSessionExecutionClaim

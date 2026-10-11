@@ -25,8 +25,10 @@ import type { TerminalPanePlacement } from '../../shared/terminal-pane-placement
 import type { PtyManagementApi } from './pty-management-api'
 import type { TerminalProcessInspection } from '../../shared/terminal-process-inspection'
 import type { CodexSharedServerStatus } from '../../shared/codex-shared-server-command'
+import type { TerminalImageCellSize } from '../../shared/terminal-image-cell-size'
+import type { TerminalModelCheckpointTransport } from '../../shared/terminal-model-checkpoint-lease'
 
-export type PtyApi = {
+export type PtyApi = Partial<TerminalModelCheckpointTransport> & {
   spawn: (opts: {
     cols: number
     rows: number
@@ -48,6 +50,7 @@ export type PtyApi = {
     shellOverride?: string
     projectRuntime?: ProjectExecutionRuntimeResolution
     terminalKittyKeyboardProtocol?: boolean
+    terminalImageCellSize?: TerminalImageCellSize
     terminalColorQueryReplies?: { foreground?: string; background?: string }
     // Why: mark the PTY hidden before its first byte so the delivery gate owns spawn-time queries (terminal-query-authority.md §races).
     initiallyHidden?: boolean
@@ -96,7 +99,7 @@ export type PtyApi = {
     options?: { requireWriteSettlement?: true }
   ) => Promise<boolean>
   onWriteUnavailable?: (callback: (payload: { id: string }) => void) => () => void
-  resize: (id: string, cols: number, rows: number) => void
+  resize: (id: string, cols: number, rows: number, cellSize?: TerminalImageCellSize) => void
   claimViewport: (id: string, cols: number, rows: number) => void
   reportGeometry: (id: string, cols: number, rows: number) => void
   signal: (id: string, signal: string) => void

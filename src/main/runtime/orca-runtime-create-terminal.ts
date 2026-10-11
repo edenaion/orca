@@ -3,6 +3,7 @@ import { OrcaRuntimeWithTerminalCreateDeduplication } from './orca-runtime-termi
 import * as dependencies from './orca-runtime-create-terminal-dependencies'
 import { createDesktopTerminal } from './orca-runtime-create-terminal-desktop'
 import { buildRuntimeAgentTeamsLaunchPlan } from './orca-runtime-agent-teams-launch-plan'
+import { revealCreatedTerminal } from './orca-runtime-create-terminal-reveal'
 import { createPtySpawnCommitReporter } from './orca-runtime-report-pty-spawn-commit'
 import { recordPtySurface, spawnSurfaceClaimSequence } from './pty-recorded-surface-topology'
 
@@ -148,6 +149,7 @@ export class OrcaRuntimeWithCreateTerminal extends OrcaRuntimeWithTerminalCreate
             ...(launchOpts.shellOverride ? { shellOverride: launchOpts.shellOverride } : {}),
             ...(terminalColorQueryReplies ? { terminalColorQueryReplies } : {}),
             terminalKittyKeyboardProtocol: launchOpts.terminalKittyKeyboardProtocol,
+            terminalImageCellSize: launchOpts.terminalImageCellSize,
             ...(launchOpts.agentSessionClaim
               ? {
                   agentSessionEnsure: {
@@ -246,32 +248,27 @@ export class OrcaRuntimeWithCreateTerminal extends OrcaRuntimeWithTerminalCreate
             ...(cwd !== workspace.path ? { startupCwd: cwd } : {})
           })
         }
-        let surface: dependencies.RuntimeTerminalCreate['surface'] = 'background'
-        let warning: string | undefined
-        if (presentation !== 'background' && this.notifier?.revealTerminalSession) {
-          try {
-            await this.notifier.revealTerminalSession(workspace.id, {
-              ptyId: result.id,
-              title: launchOpts.title ?? null,
-              ...(cwd !== workspace.path ? { cwd } : {}),
-              ...(effectiveLaunchConfig ? { launchConfig: effectiveLaunchConfig } : {}),
-              ...(launchToken ? { launchToken } : {}),
-              ...(launchOpts.launchAgent ? { launchAgent: launchOpts.launchAgent } : {}),
-              ...(launchOpts.viewMode ? { viewMode: launchOpts.viewMode } : {}),
-              activate: presentation === 'focused',
-              ...(presentation ? { presentation } : {}),
-              ...dependencies.ownerSurfacing(opts.surfaceOwner !== false),
-              tabId,
-              leafId
-            })
-            surface = 'visible'
-          } catch (err) {
-            console.warn(`[terminal-create] failed to create inactive tab for ${result.id}:`, err)
-            warning = dependencies.createTerminalRevealWarning(handle, err)
+        const { surface, warning } = await revealCreatedTerminal({
+          notifier: this.notifier,
+          presentation,
+          worktreeId: workspace.id,
+          handle,
+          ptyId: result.id,
+          reveal: {
+            ptyId: result.id,
+            title: launchOpts.title ?? null,
+            ...(cwd !== workspace.path ? { cwd } : {}),
+            ...(effectiveLaunchConfig ? { launchConfig: effectiveLaunchConfig } : {}),
+            ...(launchToken ? { launchToken } : {}),
+            ...(launchOpts.launchAgent ? { launchAgent: launchOpts.launchAgent } : {}),
+            ...(launchOpts.viewMode ? { viewMode: launchOpts.viewMode } : {}),
+            activate: presentation === 'focused',
+            ...(presentation ? { presentation } : {}),
+            ...dependencies.ownerSurfacing(opts.surfaceOwner !== false),
+            tabId,
+            leafId
           }
-        } else if (presentation !== 'background') {
-          warning = dependencies.createTerminalRevealWarning(handle)
-        }
+        })
         return {
           handle,
           tabId,
