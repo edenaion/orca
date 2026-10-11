@@ -42,8 +42,12 @@ export class OrcaRuntimeWithCreatePtyHeadlessTerminalState extends OrcaRuntimeWi
     if (isNativeWindowsConptyPty(ptyId)) {
       emulator.installConptyPrimaryDeviceAttributesOverride()
     }
-    emulator.installViewAttributeResponder(() => getTerminalViewAttributes())
-    const viewAttributes = getTerminalViewAttributes()
+    // Why the lazy getter: replies must use the freshest renderer push at
+    // parse time, and stay silent (never default) before the first push.
+    emulator.installViewAttributeResponder(() =>
+      getTerminalViewAttributes(this.ptysById.get(ptyId)?.launchAgent)
+    )
+    const viewAttributes = getTerminalViewAttributes(this.ptysById.get(ptyId)?.launchAgent)
     if (viewAttributes) {
       emulator.applyPushedViewAttributes(viewAttributes)
     }
