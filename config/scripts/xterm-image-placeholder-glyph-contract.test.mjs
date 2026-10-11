@@ -5,6 +5,7 @@ import {
   placeholderCells,
   PLACEHOLDER,
   PNG,
+  render,
   write,
   writeKitty
 } from './xterm-kitty-placeholder-test-terminal.mjs'
@@ -56,17 +57,33 @@ describe('Kitty placeholder glyph suppression', () => {
     }
   })
 
-  it('leaves unmatched text visible and clears suppression after placement deletion', async () => {
+  it('draws nothing for cells whose placement is unknown, deleted or not yet decoded', async () => {
     const h = createPlaceholderTerminal()
     try {
-      await writeKitty(h.terminal, 'a=T,f=100,i=7,U=1,p=11,c=2,r=2', PNG)
-      await write(h.terminal, placeholderCells(7, 10))
-      expect(h.storage.getHiddenGlyphColumns(0)).toBeUndefined()
-      await write(h.terminal, `\x1b[1;1H${placeholderCells(7, 11)}`)
+      await write(h.terminal, placeholderCells(7))
       expect([...h.storage.getHiddenGlyphColumns(0)]).toEqual([0, 1])
+      expect([...h.storage.getHiddenGlyphColumns(1)]).toEqual([0, 1])
+      await writeKitty(h.terminal, 'a=T,f=100,i=7,U=1,p=11,c=2,r=2', PNG)
+      await write(h.terminal, `\x1b[1;1H${placeholderCells(7, 10)}`)
+      expect([...h.storage.getHiddenGlyphColumns(0)]).toEqual([0, 1])
+      expect(render(h)).toHaveLength(0)
+      await write(h.terminal, `\x1b[1;1H${placeholderCells(7, 11)}`)
+      expect(render(h)).toHaveLength(2)
       await writeKitty(h.terminal, 'a=d,d=I,i=7,p=11,q=2')
-      expect(h.storage.getHiddenGlyphColumns(0)).toBeUndefined()
+      expect(render(h)).toHaveLength(0)
+      expect([...h.storage.getHiddenGlyphColumns(0)]).toEqual([0, 1])
       expect(h.terminal.buffer.active.getLine(0).getCell(0).getChars()).toContain(PLACEHOLDER)
+    } finally {
+      h.terminal.dispose()
+    }
+  })
+
+  it('leaves plain text visible and keeps cells outside a known grid visible', async () => {
+    const h = createPlaceholderTerminal()
+    try {
+      await writeKitty(h.terminal, 'a=T,f=100,i=7,U=1,c=1,r=1', PNG)
+      await write(h.terminal, `plain ${placeholderCells(7, 0, 2, 1)}`)
+      expect([...h.storage.getHiddenGlyphColumns(0)]).toEqual([6])
     } finally {
       h.terminal.dispose()
     }
